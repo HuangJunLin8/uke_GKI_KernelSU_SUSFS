@@ -297,40 +297,14 @@ jobs:
           $REPO --trace sync -c -j$(nproc --all) --no-tags --fail-fast
           echo "REMOTE_BRANCH=$REMOTE_BRANCH" >> $GITHUB_ENV
 
-      - name: 应用 Stock Config 伪装
+      - name: 使用 stock_defconfig 作为基础配置 (如果存在)
         run: |
           STOCK_SRC="$GITHUB_WORKSPACE/config/stock_defconfig"
-          STOCK_DST="$KERNEL_ROOT/common/arch/arm64/configs/stock_defconfig"
-
-          if [ ! -f "$STOCK_SRC" ]; then
-            echo "未检测到 $STOCK_SRC，跳过 Stock Config 伪装。"
-            exit 0
-          fi
-
-          mkdir -p "$(dirname "$STOCK_DST")"
-          if ! cp "$STOCK_SRC" "$STOCK_DST"; then
-            echo "::error::复制 stock_defconfig 失败: $STOCK_SRC -> $STOCK_DST"
-            exit 1
-          fi
-          echo "已复制 stock_defconfig -> $STOCK_DST"
-
-          NEW_RULE='$(obj)/config_data: arch/arm64/configs/stock_defconfig FORCE'
-          OLD_RULE='$(obj)/config_data: $(KCONFIG_CONFIG) FORCE'
-          TARGET_MAKEFILE="$KERNEL_ROOT/common/kernel/Makefile"
-
-          if [ ! -f "$TARGET_MAKEFILE" ]; then
-            echo "::error::未找到 $TARGET_MAKEFILE"
-            exit 1
-          fi
-
-          if grep -qF "$NEW_RULE" "$TARGET_MAKEFILE"; then
-            echo "config_data 规则已是 stock_defconfig，跳过。"
-          elif grep -qF "$OLD_RULE" "$TARGET_MAKEFILE"; then
-            sed -i 's|$(obj)/config_data: $(KCONFIG_CONFIG) FORCE|$(obj)/config_data: arch/arm64/configs/stock_defconfig FORCE|' "$TARGET_MAKEFILE"
-            echo "已替换 config_data 规则: $TARGET_MAKEFILE"
+          if [ -f "$STOCK_SRC" ]; then
+            echo "检测到 config/stock_defconfig，将其用作构建的基础配置。"
+            cp "$STOCK_SRC" "$DEFCONFIG"
           else
-            echo "::error::未在 $TARGET_MAKEFILE 找到规则: $OLD_RULE"
-            exit 1
+            echo "未检测到 config/stock_defconfig，使用默认 gki_defconfig。"
           fi
 
       - name: 提取实际子版本号
