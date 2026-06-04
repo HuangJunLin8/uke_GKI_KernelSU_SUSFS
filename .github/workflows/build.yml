@@ -297,132 +297,41 @@ jobs:
           $REPO --trace sync -c -j$(nproc --all) --no-tags --fail-fast
           echo "REMOTE_BRANCH=$REMOTE_BRANCH" >> $GITHUB_ENV
 
-
-      - name: 查看 merge_config.sh
+      - name: 应用 Stock Config 伪装
         run: |
-              echo "KERNEL_ROOT=$KERNEL_ROOT"
-              find "$KERNEL_ROOT" -name merge_config.sh
-          
-              echo "=============================="
-              sed -n '1,120p' "$KERNEL_ROOT/common/scripts/kconfig/merge_config.sh"
-
-
-      - name: 整合自定义 Stock Config 并修复冲突
-        run: |
-          # 定义路径
           STOCK_SRC="$GITHUB_WORKSPACE/config/stock_defconfig"
-          GKI_DEFCONFIG="$DEFCONFIG"
-          MERGE_SCRIPT="$KERNEL_ROOT/common/scripts/kconfig/merge_config.sh"
+          STOCK_DST="$KERNEL_ROOT/common/arch/arm64/configs/stock_defconfig"
 
-          TMP_MERGED="$(mktemp)"
-          TMP_FINAL="$(mktemp)"
+          if [ ! -f "$STOCK_SRC" ]; then
+            echo "未检测到 $STOCK_SRC，跳过 Stock Config 伪装。"
+            exit 0
+          fi
 
-          cleanup() {
-              rm -f "$TMP_MERGED" "$TMP_FINAL"
-          }
+          mkdir -p "$(dirname "$STOCK_DST")"
+          if ! cp "$STOCK_SRC" "$STOCK_DST"; then
+            echo "::error::复制 stock_defconfig 失败: $STOCK_SRC -> $STOCK_DST"
+            exit 1
+          fi
+          echo "已复制 stock_defconfig -> $STOCK_DST"
 
-          trap cleanup EXIT
+          NEW_RULE='$(obj)/config_data: arch/arm64/configs/stock_defconfig FORCE'
+          OLD_RULE='$(obj)/config_data: $(KCONFIG_CONFIG) FORCE'
+          TARGET_MAKEFILE="$KERNEL_ROOT/common/kernel/Makefile"
 
-          # 选择 base config
-          cp "$GKI_DEFCONFIG" "$TMP_MERGED"
+          if [ ! -f "$TARGET_MAKEFILE" ]; then
+            echo "::error::未找到 $TARGET_MAKEFILE"
+            exit 1
+          fi
 
-          # 合并 stock config
-          if [ -f "$STOCK_SRC" ]; then
-              echo "📦 合并 stock_defconfig"
-
-              cd "$(dirname "$GKI_DEFCONFIG")"
-
-              if ! "$MERGE_SCRIPT" -m "$TMP_MERGED" "$STOCK_SRC"; then
-                  echo "❌ stock_defconfig 合并失败"
-                  exit 1
-              fi
-
-              # merge_config.sh 会直接生成 merged config
-              cp "$TMP_MERGED" "$GKI_DEFCONFIG"
-
-              echo "✅ stock_defconfig 合并完成"
+          if grep -qF "$NEW_RULE" "$TARGET_MAKEFILE"; then
+            echo "config_data 规则已是 stock_defconfig，跳过。"
+          elif grep -qF "$OLD_RULE" "$TARGET_MAKEFILE"; then
+            sed -i 's|$(obj)/config_data: $(KCONFIG_CONFIG) FORCE|$(obj)/config_data: arch/arm64/configs/stock_defconfig FORCE|' "$TARGET_MAKEFILE"
+            echo "已替换 config_data 规则: $TARGET_MAKEFILE"
           else
-              echo "ℹ️ 未检测到 stock_defconfig，跳过"
+            echo "::error::未在 $TARGET_MAKEFILE 找到规则: $OLD_RULE"
+            exit 1
           fi
-
-          # 后续操作都基于 TMP_MERGED
-          cp "$GKI_DEFCONFIG" "$TMP_MERGED"
-
-          # 清理 merge 输出污染
-          echo "🧹 清理异常行"
-
-          grep -vE "^(Using |Merging |Value of |Previous value:|New value:|arch/|WARNING:|ERROR:)" \
-              "$TMP_MERGED" > "$TMP_FINAL"
-
-          mv "$TMP_FINAL" "$TMP_MERGED"
-
-          # Baseband Guard
-          if [ "${{ inputs.use_bbg }}" = "true" ]; then
-              echo "🔧 修复 Baseband-guard LSM"
-
-              current_lsm=$(grep '^CONFIG_LSM=' "$TMP_MERGED" | cut -d'"' -f2)
-
-              if [ -z "$current_lsm" ]; then
-                  echo 'CONFIG_LSM="baseband_guard"' >> "$TMP_MERGED"
-              elif [[ "$current_lsm" != *baseband_guard* ]]; then
-                  new_lsm="${current_lsm},baseband_guard"
-                  sed -i "s|^CONFIG_LSM=.*|CONFIG_LSM=\"${new_lsm}\"|" "$TMP_MERGED"
-              fi
-          fi
-
-          # 基础依赖
-          echo "🔍 检查关键依赖项"
-
-          REQUIRED_OPTS=(
-              CONFIG_POSIX_MQUEUE
-              CONFIG_NETFILTER_XT_MATCH_ADDRTYPE
-              CONFIG_NETFILTER_XT_TARGET_LOG
-              CONFIG_NETFILTER_XT_MATCH_RECENT
-              CONFIG_IP_SET
-              CONFIG_ZSMALLOC
-          )
-
-          for opt in "${REQUIRED_OPTS[@]}"; do
-              if grep -q "^# ${opt} is not set" "$TMP_MERGED"; then
-                  sed -i "s/^# ${opt} is not set/${opt}=y/" "$TMP_MERGED"
-              elif ! grep -q "^${opt}=y" "$TMP_MERGED"; then
-                  echo "${opt}=y" >> "$TMP_MERGED"
-              fi
-          done
-
-          # SUSFS 依赖
-          if [ "${{ inputs.enable_susfs }}" = "true" ]; then
-              echo "🔧 补齐 SUSFS 依赖"
-
-              SUSFS_OPTS=(
-                  CONFIG_TMPFS_XATTR
-                  CONFIG_TMPFS_POSIX_ACL
-              )
-
-              for opt in "${SUSFS_OPTS[@]}"; do
-                  if grep -q "^# ${opt} is not set" "$TMP_MERGED"; then
-                      sed -i "s/^# ${opt} is not set/${opt}=y/" "$TMP_MERGED"
-                  elif ! grep -q "^${opt}=y" "$TMP_MERGED"; then
-                      echo "${opt}=y" >> "$TMP_MERGED"
-                  fi
-              done
-          fi
-
-          # ZRAM
-          if [ "${{ inputs.use_zram }}" = "true" ]; then
-              echo "🔧 启用 ZRAM"
-
-              if grep -q "^# CONFIG_ZRAM is not set" "$TMP_MERGED"; then
-                  sed -i 's/^# CONFIG_ZRAM is not set/CONFIG_ZRAM=y/' "$TMP_MERGED"
-              elif ! grep -q "^CONFIG_ZRAM=y" "$TMP_MERGED"; then
-                  echo "CONFIG_ZRAM=y" >> "$TMP_MERGED"
-              fi
-          fi
-
-          # 输出最终 config
-          cp "$TMP_MERGED" "$GKI_DEFCONFIG"
-
-          echo "🎯 Config merge 完成"
 
       - name: 提取实际子版本号
         run: |
