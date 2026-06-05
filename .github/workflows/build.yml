@@ -948,6 +948,12 @@ jobs:
             fi
           }
 
+          enable_config_if_defined CONFIG_USER_NS
+          enable_config CONFIG_SETGROUPS
+          enable_config CONFIG_CGROUP_PIDS
+          enable_config CONFIG_CGROUP_DEVICE
+          enable_config_if_defined CONFIG_BRIDGE_NETFILTER
+
           if [[ "${{ inputs.android_version }}" == "android15" && "${{ inputs.kernel_version }}" == "6.6" ]]; then
             # 1. 开启用户命名空间（必须）
             # enable_config_if_defined CONFIG_USER_NS
