@@ -46,9 +46,21 @@
 
 ![Screenshot_2026-06-04-15-27-19-458_com.microsoft.emmx](assets/Screenshot_2026-06-04-15-27-19-458_com.microsoft.emmx.jpg)
 
+## 5. docker
+
+额外编译了一版内核，开了 `CONFIG_USER_NS` ，容器内可以正常运行 `docker` 了，详见 [release-dev](https://github.com/HuangJunLin8/uke_GKI_KernelSU_SUSFS/releases/tag/dev)
+
+但`Droidspaces` 的检查输出会提示建议关闭该选项
+
+`User Namespace` 可让一个进程在自己创建的小世界里拥有 `root` 身份，而不是真正获得系统 `root`
+
+但普通 `App` 可以因此调用更多的内核功能，所以要防止恶意 `App` 找出漏洞提权
 
 
-## 5. chroot 和 DroidSpaces 对比
+![docker2](assets/docker2.png)
+
+
+## 6. chroot 和 DroidSpaces 对比
 
 使用 `DroidSpaces` 创建的 `Linux` 优势是进程隔离，**有 `systemd`**
 
