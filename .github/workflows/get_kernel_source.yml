@@ -1,0 +1,167 @@
+name: 下载内核源码
+
+on:
+  workflow_dispatch:
+    inputs:
+      android_version:
+        description: Android Version
+        required: true
+        default: "android14"
+
+      kernel_version:
+        description: Kernel Version
+        required: true
+        default: "6.1"
+
+      os_patch_level:
+        description: OS Patch Level
+        required: true
+        default: "2025-01"
+
+permissions:
+  contents: read
+
+env:
+  KERNEL_ROOT: ${{ github.workspace }}/kernel_source
+
+jobs:
+  fetch-kernel:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: 检出仓库
+        uses: actions/checkout@v6
+
+      - name: 清理磁盘
+        uses: endersonmenezes/free-disk-space@v3
+        with:
+          remove_android: true
+          remove_dotnet: true
+          remove_haskell: true
+          remove_tool_cache: true
+          remove_swap: true
+
+      - name: 查看磁盘
+        run: |
+          df -h
+
+      - name: 安装依赖
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y git curl repo
+
+      - name: 初始化环境
+        run: |
+          mkdir -p "$KERNEL_ROOT"
+
+          BUILD_TIME=$(date '+%Y-%m-%d_%H-%M-%S')
+
+          echo "BUILD_TIME=$BUILD_TIME" >> $GITHUB_ENV
+
+      - name: 初始化源码
+        working-directory: ${{ env.KERNEL_ROOT }}
+        run: |
+          FORMATTED_BRANCH="${{ github.event.inputs.android_version }}-${{ github.event.inputs.kernel_version }}-${{ github.event.inputs.os_patch_level }}"
+
+          echo "初始化 repo，分支: common-${FORMATTED_BRANCH}"
+
+          repo init \
+            --depth=1 \
+            -u https://android.googlesource.com/kernel/manifest \
+            -b common-${FORMATTED_BRANCH} \
+            --repo-rev=v2.16
+
+          REMOTE_BRANCH=$(git ls-remote https://android.googlesource.com/kernel/common "${FORMATTED_BRANCH}")
+
+          DEFAULT_MANIFEST_PATH=.repo/manifests/default.xml
+
+          if grep -q deprecated <<< "$REMOTE_BRANCH"; then
+            echo "检测到已弃用的分支: ${FORMATTED_BRANCH}"
+
+            sed -i \
+              "s|\"${FORMATTED_BRANCH}\"|\"deprecated/${FORMATTED_BRANCH}\"|g" \
+              "$DEFAULT_MANIFEST_PATH"
+          fi
+
+      - name: 同步源码
+        working-directory: ${{ env.KERNEL_ROOT }}
+        run: |
+          repo sync \
+            -c \
+            -j$(nproc) \
+            --no-tags \
+            --fail-fast
+
+      - name: 统计源码大小
+        working-directory: ${{ env.KERNEL_ROOT }}
+        run: |
+          echo "源码总大小："
+          du -sh .
+
+          echo
+          echo "顶层目录："
+          du -sh * | sort -h || true
+
+      - name: 记录信息
+        working-directory: ${{ env.KERNEL_ROOT }}
+        run: |
+          FORMATTED_BRANCH="${{ github.event.inputs.android_version }}-${{ github.event.inputs.kernel_version }}-${{ github.event.inputs.os_patch_level }}"
+
+          {
+            echo "Branch:"
+            echo "${FORMATTED_BRANCH}"
+            echo
+
+            echo "Common Commit:"
+            git -C common rev-parse HEAD
+            echo
+
+            echo "Kernel Version:"
+            head -n 5 common/Makefile
+            echo
+
+            echo "Build Time:"
+            date
+          } > SOURCE_INFO.txt
+
+          cat SOURCE_INFO.txt
+
+      - name: 清理仓库
+        working-directory: ${{ env.KERNEL_ROOT }}
+        run: |
+          find . \
+            -type d \
+            -name ".git" \
+            -prune \
+            -exec rm -rf {} +
+
+          rm -rf .repo
+
+          echo "清理后大小："
+          du -sh .
+
+      - name: 打包源码
+        working-directory: ${{ github.workspace }}
+        run: |
+          FORMATTED_BRANCH="${{ github.event.inputs.android_version }}-${{ github.event.inputs.kernel_version }}-${{ github.event.inputs.os_patch_level }}"
+
+          TAR_NAME="kernel_source_${FORMATTED_BRANCH}_${BUILD_TIME}.tar.gz"
+
+          tar -czf "$TAR_NAME" kernel_source
+
+          echo "TAR_NAME=$TAR_NAME" >> $GITHUB_ENV
+
+          echo
+          echo "压缩包信息："
+          ls -lh "$TAR_NAME"
+
+          echo
+          echo "压缩包大小："
+          du -sh "$TAR_NAME"
+
+      - name: 上传制品
+        uses: actions/upload-artifact@v6
+        with:
+          name: kernel_source_${{ github.event.inputs.android_version }}_${{ github.event.inputs.kernel_version }}_${{ github.event.inputs.os_patch_level }}
+          path: ${{ github.workspace }}/${{ env.TAR_NAME }}
+          retention-days: 30
