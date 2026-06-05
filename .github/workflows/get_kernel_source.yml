@@ -30,7 +30,7 @@ jobs:
 
     steps:
       - name: 检出仓库
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
 
       - name: 清理磁盘
         uses: endersonmenezes/free-disk-space@v3
@@ -160,7 +160,7 @@ jobs:
           du -sh "$TAR_NAME"
 
       - name: 上传制品
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: kernel_source_${{ github.event.inputs.android_version }}_${{ github.event.inputs.kernel_version }}_${{ github.event.inputs.os_patch_level }}
           path: ${{ github.workspace }}/${{ env.TAR_NAME }}
